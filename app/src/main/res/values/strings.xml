@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">SquabMS</string>
+    <string name="conversations_title">Conversations:</string>
+    <string name="add_conversation">Add</string>
 </resources>
