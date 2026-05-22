@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -33,7 +34,6 @@ class MainActivity : ComponentActivity() {
     private val smsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             super.onChange(selfChange, uri)
-
             if (uri?.path?.contains("sms") == true) {
                 loadConversations()
             }
@@ -57,9 +57,7 @@ class MainActivity : ComponentActivity() {
             result.data?.data?.let { contactUri ->
                 val phoneNumber = getPhoneNumberFromContact(contactUri)
                 if (phoneNumber != null) {
-                    startActivity(Intent(this, ConversationActivity::class.java).apply {
-                        putExtra("PHONE_NUMBER", phoneNumber)
-                    })
+                    startConversation(phoneNumber)
                 } else {
                     Toast.makeText(this, "Contact has no phone number.", Toast.LENGTH_SHORT).show()
                 }
@@ -75,10 +73,8 @@ class MainActivity : ComponentActivity() {
 
         rvConversations = findViewById(R.id.rvConversations)
 
-        adapter = ConversationAdapter(conversationList) { phoneNumber ->
-            startActivity(Intent(this, ConversationActivity::class.java).apply {
-                putExtra("PHONE_NUMBER", phoneNumber)
-            })
+        adapter = ConversationAdapter(conversationList, this) { phoneNumber ->
+            startConversation(phoneNumber)
         }
 
         rvConversations.layoutManager = LinearLayoutManager(this)
@@ -121,10 +117,18 @@ class MainActivity : ComponentActivity() {
 
     private fun requestPermissionsIfNeeded() {
         val neededPermissions = mutableListOf<String>().apply {
-            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.READ_SMS)
-            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.SEND_SMS)
-            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.READ_CONTACTS)
-            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.RECEIVE_SMS)
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.READ_SMS)
+            }
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.SEND_SMS)
+            }
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.READ_CONTACTS)
+            }
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.RECEIVE_SMS)
+            }
         }
 
         if (neededPermissions.isNotEmpty()) {
@@ -139,11 +143,7 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_SEND, Intent.ACTION_SENDTO -> {
                 val phoneNumber = intent.data?.schemeSpecificPart ?: return
                 val message = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
-
-                startActivity(Intent(this, ConversationActivity::class.java).apply {
-                    putExtra("PHONE_NUMBER", phoneNumber)
-                    putExtra("INITIAL_MESSAGE", message)
-                })
+                startConversation(phoneNumber, message)
             }
         }
     }
@@ -173,7 +173,8 @@ class MainActivity : ComponentActivity() {
                             timestamp = formatTime(timestamp),
                             avatarResId = R.drawable.ic_contact,
                             timestampLong = timestamp,
-                            phoneNumber = phoneNumber
+                            phoneNumber = phoneNumber,
+                            contactId = getContactId(phoneNumber)
                         )
                     }
                 }
@@ -207,6 +208,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getContactId(phoneNumber: String): String? {
+        return try {
+            val uri = Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                Uri.encode(phoneNumber)
+            )
+            val cursor = contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup._ID), null, null, null)
+            var contactId: String? = null
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    contactId = it.getString(it.getColumnIndexOrThrow(ContactsContract.PhoneLookup._ID))
+                }
+            }
+            contactId
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun getPhoneNumberFromContact(contactUri: Uri): String? {
         val contactId = contentResolver.query(contactUri, arrayOf(ContactsContract.Contacts._ID), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID)) else null
@@ -224,6 +244,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun formatTime(timestamp: Long): String {
-        return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+        val messageDate = Calendar.getInstance().apply { timeInMillis = timestamp }
+        val todayDate = Calendar.getInstance()
+
+        return when {
+            messageDate.get(Calendar.YEAR) == todayDate.get(Calendar.YEAR) &&
+                    messageDate.get(Calendar.DAY_OF_YEAR) == todayDate.get(Calendar.DAY_OF_YEAR) -> {
+                SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+            }
+            else -> {
+                SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(timestamp))
+            }
+        }
+    }
+
+    private fun startConversation(phoneNumber: String, message: String = "") {
+        startActivity(Intent(this, ConversationActivity::class.java).apply {
+            putExtra("PHONE_NUMBER", phoneNumber)
+            if (message.isNotEmpty()) putExtra("INITIAL_MESSAGE", message)
+        })
     }
 }
