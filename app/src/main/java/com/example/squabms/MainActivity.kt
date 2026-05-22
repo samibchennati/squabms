@@ -1,11 +1,18 @@
 package com.example.squabms
 
 import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +30,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var adapter: ConversationAdapter
     private val conversationList = mutableListOf<Conversation>()
 
+    private val smsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            super.onChange(selfChange, uri)
+
+            if (uri?.path?.contains("sms") == true) {
+                loadConversations()
+            }
+        }
+    }
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -33,36 +50,101 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val contactPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            result.data?.data?.let { contactUri ->
+                val phoneNumber = getPhoneNumberFromContact(contactUri)
+                if (phoneNumber != null) {
+                    startActivity(Intent(this, ConversationActivity::class.java).apply {
+                        putExtra("PHONE_NUMBER", phoneNumber)
+                    })
+                } else {
+                    Toast.makeText(this, "Contact has no phone number.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        createNotificationChannel()
+
         rvConversations = findViewById(R.id.rvConversations)
 
         adapter = ConversationAdapter(conversationList) { phoneNumber ->
-            val intent = Intent(this, ConversationActivity::class.java)
-            intent.putExtra("PHONE_NUMBER", phoneNumber)
-            startActivity(intent)
+            startActivity(Intent(this, ConversationActivity::class.java).apply {
+                putExtra("PHONE_NUMBER", phoneNumber)
+            })
         }
 
         rvConversations.layoutManager = LinearLayoutManager(this)
         rvConversations.adapter = adapter
 
-        val swipeCallback = SwipeToDeleteCallback(adapter, contentResolver, conversationList)
-        ItemTouchHelper(swipeCallback).attachToRecyclerView(rvConversations)
+        ItemTouchHelper(SwipeToDeleteCallback(adapter, contentResolver, conversationList))
+            .attachToRecyclerView(rvConversations)
 
-        val permissionsNeeded = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.READ_SMS)
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.READ_CONTACTS)
+        findViewById<ImageView>(R.id.ivAddContact).setOnClickListener {
+            contactPickerLauncher.launch(
+                Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI)
+            )
         }
 
-        if (permissionsNeeded.isNotEmpty()) {
-            requestPermissionLauncher.launch(permissionsNeeded.toTypedArray())
+        contentResolver.registerContentObserver(
+            Uri.parse("content://sms"),
+            true,
+            smsObserver
+        )
+
+        requestPermissionsIfNeeded()
+        handleIncomingSmsIntent(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        contentResolver.unregisterContentObserver(smsObserver)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "sms_channel",
+                "SMS Messages",
+                NotificationManager.IMPORTANCE_HIGH
+            )
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun requestPermissionsIfNeeded() {
+        val neededPermissions = mutableListOf<String>().apply {
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.READ_SMS)
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.SEND_SMS)
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.READ_CONTACTS)
+            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) add(Manifest.permission.RECEIVE_SMS)
+        }
+
+        if (neededPermissions.isNotEmpty()) {
+            requestPermissionLauncher.launch(neededPermissions.toTypedArray())
         } else {
             loadConversations()
+        }
+    }
+
+    private fun handleIncomingSmsIntent(intent: Intent) {
+        when (intent.action) {
+            Intent.ACTION_SEND, Intent.ACTION_SENDTO -> {
+                val phoneNumber = intent.data?.schemeSpecificPart ?: return
+                val message = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
+
+                startActivity(Intent(this, ConversationActivity::class.java).apply {
+                    putExtra("PHONE_NUMBER", phoneNumber)
+                    putExtra("INITIAL_MESSAGE", message)
+                })
+            }
         }
     }
 
@@ -71,9 +153,7 @@ class MainActivity : ComponentActivity() {
             val cursor = contentResolver.query(
                 Uri.parse("content://sms/inbox"),
                 arrayOf("address", "body", "date"),
-                null,
-                null,
-                "date DESC"
+                null, null, "date DESC"
             )
 
             val conversationMap = mutableMapOf<String, Conversation>()
@@ -81,22 +161,20 @@ class MainActivity : ComponentActivity() {
             cursor?.use {
                 while (it.moveToNext()) {
                     val phoneNumber = it.getString(it.getColumnIndexOrThrow("address"))
-
                     if (phoneNumber.isNullOrEmpty()) continue
 
-                    val lastMessage = it.getString(it.getColumnIndexOrThrow("body"))
+                    val lastMessage = it.getString(it.getColumnIndexOrThrow("body")) ?: ""
                     val timestamp = it.getLong(it.getColumnIndexOrThrow("date"))
 
                     if (!conversationMap.containsKey(phoneNumber)) {
-                        val conversation = Conversation(
+                        conversationMap[phoneNumber] = Conversation(
                             contactName = getContactName(phoneNumber),
-                            lastMessage = lastMessage ?: "",
+                            lastMessage = lastMessage,
                             timestamp = formatTime(timestamp),
                             avatarResId = R.drawable.ic_contact,
                             timestampLong = timestamp,
                             phoneNumber = phoneNumber
                         )
-                        conversationMap[phoneNumber] = conversation
                     }
                 }
             }
@@ -116,15 +194,7 @@ class MainActivity : ComponentActivity() {
                 ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
                 Uri.encode(phoneNumber)
             )
-
-            val cursor = contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null,
-                null,
-                null
-            )
-
+            val cursor = contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
             var contactName = phoneNumber
             cursor?.use {
                 if (it.moveToFirst()) {
@@ -137,8 +207,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun getPhoneNumberFromContact(contactUri: Uri): String? {
+        val contactId = contentResolver.query(contactUri, arrayOf(ContactsContract.Contacts._ID), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID)) else null
+        } ?: return null
+
+        return contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+            arrayOf(contactId),
+            null
+        )?.use {
+            if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) else null
+        }
+    }
+
     private fun formatTime(timestamp: Long): String {
-        val sdf = SimpleDateFormat("h:mm a", Locale.getDefault())
-        return sdf.format(Date(timestamp))
+        return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
     }
 }

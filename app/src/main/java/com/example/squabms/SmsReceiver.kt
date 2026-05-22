@@ -12,13 +12,17 @@ import androidx.core.content.ContextCompat
 
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
-        if (intent?.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+        if (intent?.action == Telephony.Sms.Intents.SMS_DELIVER_ACTION) {
             val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
 
             for (message in messages) {
                 val sender = message.originatingAddress
                 val body = message.messageBody
                 val timestamp = message.timestampMillis
+
+                Log.d("SmsReceiver", "SMS from $sender: $body")
+
+
 
                 showNotification(context, sender, body)
             }
@@ -29,8 +33,6 @@ class SmsReceiver : BroadcastReceiver() {
 
     private fun showNotification(context: Context?, sender: String?, body: String?) {
         if (context == null) return
-
-        // Check permission before posting notification
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
