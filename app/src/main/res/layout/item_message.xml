@@ -27,7 +27,7 @@
             android:id="@+id/tvTimestamp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="2:30 PM"
+            android:text="2019-05-31, 6:27p, Carrier XXXX Text"
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:layout_marginTop="4dp" />

@@ -62,7 +62,7 @@ class ConversationActivity : ComponentActivity() {
 
         tvContactName.text = getContactName(phoneNumber)
 
-        messageAdapter = MessageAdapter(itemList)
+        messageAdapter = MessageAdapter(itemList, this, phoneNumber)
         rvMessages.layoutManager = LinearLayoutManager(this)
         rvMessages.adapter = messageAdapter
 

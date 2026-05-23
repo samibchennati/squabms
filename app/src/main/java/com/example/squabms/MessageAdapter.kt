@@ -1,6 +1,8 @@
 package com.example.squabms
 
+import android.content.Context
 import android.graphics.Color
+import android.telephony.TelephonyManager
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -8,8 +10,11 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class MessageAdapter(private val items: List<MessageItem>) :
+class MessageAdapter(private val items: List<MessageItem>, private val context: Context, private val phoneNumber: String) :
     RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -48,6 +53,44 @@ class MessageAdapter(private val items: List<MessageItem>) :
 
     override fun getItemCount() = items.size
 
+    private fun getCarrierName(): String {
+        return try {
+            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            telephonyManager.networkOperatorName ?: "Unknown"
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+
+    private fun getMyPhoneNumber(): String {
+        return try {
+            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            telephonyManager.line1Number?.takeLast(4) ?: "0000"
+        } catch (e: Exception) {
+            "0000"
+        }
+    }
+
+    private fun formatTimestamp(dateLong: Long): String {
+        val date = Date(dateLong)
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+
+        val timeFormat = SimpleDateFormat("h:mma", Locale.US)
+        val rawTime = timeFormat.format(date).lowercase(Locale.US)
+
+        val formattedTime = when {
+            rawTime.endsWith("am") -> rawTime.replace("am", "a")
+            rawTime.endsWith("pm") -> rawTime.replace("pm", "p")
+            else -> rawTime
+        }
+
+        val formattedDate = dateFormat.format(date)
+        val carrierName = getCarrierName()
+        val myLastFour = getMyPhoneNumber()
+
+        return "$formattedDate, $formattedTime, $carrierName $myLastFour Text"
+    }
+
     inner class DateViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val tvDate: TextView = itemView.findViewById(R.id.tvDate)
 
@@ -63,7 +106,7 @@ class MessageAdapter(private val items: List<MessageItem>) :
 
         fun bind(message: Message) {
             tvMessage.text = message.body
-            tvTimestamp.text = message.timestamp
+            tvTimestamp.text = formatTimestamp(message.dateLong)
 
             val params = messageContainer.layoutParams as LinearLayout.LayoutParams
             if (message.isReceived) {
