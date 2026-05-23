@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#212121"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/tvDialogTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Select SIM"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:padding="8dp"
+        android:background="#333333" />
+
+    <ListView
+        android:id="@+id/lvSimList"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:divider="#333333"
+        android:dividerHeight="1dp" />
+
+</LinearLayout>

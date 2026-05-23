@@ -7,9 +7,16 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.ContactsContract
 import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
+import android.telephony.TelephonyManager
+import android.view.LayoutInflater
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ListView
+import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -26,12 +33,15 @@ class ConversationActivity : ComponentActivity() {
 
     private lateinit var rvMessages: RecyclerView
     private lateinit var tvContactName: TextView
+    private lateinit var tvSendOnLabel: TextView
+    private lateinit var tvSendOnDigits: TextView
     private lateinit var etMessage: EditText
     private lateinit var btnSend: Button
     private val messageList = mutableListOf<Message>()
     private val itemList = mutableListOf<MessageItem>()
     private lateinit var messageAdapter: MessageAdapter
     private var phoneNumber = ""
+    private var currentSimSlot = 0
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -56,26 +66,28 @@ class ConversationActivity : ComponentActivity() {
         }
 
         tvContactName = findViewById(R.id.tvContactName)
+        tvSendOnLabel = findViewById(R.id.tvSendOnLabel)
+        tvSendOnDigits = findViewById(R.id.tvSendOnDigits)
         rvMessages = findViewById(R.id.rvMessages)
         etMessage = findViewById(R.id.etMessage)
         btnSend = findViewById(R.id.btnSend)
 
         tvContactName.text = getContactName(phoneNumber)
+        updateSendOnDigits()
+        tvSendOnDigits.setOnClickListener { showSimSelectionDialog() }
 
         messageAdapter = MessageAdapter(itemList, this, phoneNumber)
         rvMessages.layoutManager = LinearLayoutManager(this)
         rvMessages.adapter = messageAdapter
 
-        val permissionsToRequest = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.READ_SMS)
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.SEND_SMS)
-        }
+        val permissions = listOf(
+            Manifest.permission.READ_SMS,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_PHONE_STATE
+        ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
 
-        if (permissionsToRequest.isNotEmpty()) {
-            requestPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
+        if (permissions.isNotEmpty()) {
+            requestPermissionsLauncher.launch(permissions.toTypedArray())
             return
         }
 
@@ -87,8 +99,96 @@ class ConversationActivity : ComponentActivity() {
             }
         }
 
-        btnSend.setOnClickListener {
-            sendMessage()
+        btnSend.setOnClickListener { sendMessage() }
+    }
+
+    private fun getMyPhoneNumberLastFour(): String {
+        return try {
+            val telephonyManager = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+            val subscriptionManager = getSystemService(SubscriptionManager::class.java)
+            val activeSubscriptionInfo = subscriptionManager.activeSubscriptionInfoList?.find { it.simSlotIndex == currentSimSlot }
+
+            val number = activeSubscriptionInfo?.number ?: telephonyManager.line1Number
+            number?.takeLast(4) ?: "0000"
+        } catch (e: Exception) {
+            "0000"
+        }
+    }
+
+    private fun updateSendOnDigits() {
+        tvSendOnDigits.text = getMyPhoneNumberLastFour()
+    }
+
+    private fun showSimSelectionDialog() {
+        try {
+            val subscriptionManager = getSystemService(SubscriptionManager::class.java)
+            val activeSubscriptions = subscriptionManager.activeSubscriptionInfoList
+
+            if (activeSubscriptions.isNullOrEmpty()) {
+                Toast.makeText(this, "No SIM cards detected", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val simNames = mutableListOf<String>()
+            val simIndices = mutableListOf<Int>()
+
+            activeSubscriptions.forEachIndexed { index, sub ->
+                val name = when (val displayNameObj = sub.displayName) {
+                    is String -> if (displayNameObj.isEmpty()) "SIM ${sub.simSlotIndex + 1}" else displayNameObj
+                    is Int -> try {
+                        val resolved = getString(displayNameObj)
+                        if (resolved.isEmpty()) "SIM ${sub.simSlotIndex + 1}" else resolved
+                    } catch (e: Exception) {
+                        "SIM ${sub.simSlotIndex + 1}"
+                    }
+                    else -> "SIM ${sub.simSlotIndex + 1}"
+                }
+
+                val digits = sub.number?.takeLast(4) ?: "Unknown"
+                val finalEntry = "$name ($digits)"
+
+                if (finalEntry.isNotBlank()) {
+                    simNames.add(finalEntry)
+                    simIndices.add(index)
+                }
+            }
+
+            if (simNames.isEmpty()) {
+                Toast.makeText(this, "No valid SIM data found", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val inflater = LayoutInflater.from(this)
+            val popupView = inflater.inflate(R.layout.popup_sim_list, null)
+
+            val popupWindow = PopupWindow(
+                popupView,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                true
+            )
+
+            popupWindow.elevation = 10f
+            popupWindow.isFocusable = true
+            popupWindow.isOutsideTouchable = true
+
+            val listView = popupView.findViewById<ListView>(R.id.lvSimList)
+            popupView.findViewById<TextView>(R.id.tvDialogTitle).text = "Select SIM"
+
+            listView.adapter = ArrayAdapter(this, R.layout.item_sim_option, simNames)
+
+            listView.setOnItemClickListener { _, _, position, _ ->
+                val selectedSim = activeSubscriptions[simIndices[position]]
+                currentSimSlot = selectedSim.simSlotIndex
+                updateSendOnDigits()
+                popupWindow.dismiss()
+            }
+
+            popupWindow.showAsDropDown(tvSendOnDigits, 0, 0)
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Error loading SIMs: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -98,15 +198,7 @@ class ConversationActivity : ComponentActivity() {
                 ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
                 Uri.encode(phoneNumber)
             )
-
-            val cursor = contentResolver.query(
-                uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null,
-                null,
-                null
-            )
-
+            val cursor = contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)
             var contactName = phoneNumber
             cursor?.use {
                 if (it.moveToFirst()) {
